@@ -154,7 +154,7 @@ body::before{content:'';position:fixed;inset:0;background:radial-gradient(ellips
   <header class="hdr">
     <div class="hdr-badge" id="status-badge"><span class="dot"></span> Connected to Notion</div>
     <h1>Clinic OS — Data Entry Hub</h1>
-    <p>Select a database, then chat or upload a spreadsheet. Entries go straight to Notion.</p>
+    <p>Add entries by chat or spreadsheet. Search across all your data with AI.</p>
   </header>
 
   <!-- Config warning (shows if server not configured) -->
@@ -169,6 +169,7 @@ body::before{content:'';position:fixed;inset:0;background:radial-gradient(ellips
 
   <div class="tabs" id="tabs">
     <div class="tab on" id="tab-chat" onclick="switchMode('chat')">💬 Chat Entry</div>
+    <div class="tab" id="tab-search" onclick="switchMode('search')">🔍 Search & Ask</div>
     <div class="tab" id="tab-upload" onclick="switchMode('upload')">📄 Upload Spreadsheet</div>
   </div>
 
@@ -180,6 +181,16 @@ body::before{content:'';position:fixed;inset:0;background:radial-gradient(ellips
       <div class="chat-input-row">
         <input class="chat-in" id="chat-in" placeholder="Select a database above..." disabled onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMsg()}">
         <button class="send-btn" id="send-btn" onclick="sendMsg()" disabled>Send</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel" id="panel-search">
+    <div class="chat-box">
+      <div class="chat-msgs" id="search-msgs"></div>
+      <div class="chat-input-row">
+        <input class="chat-in" id="search-in" placeholder="Ask anything about your clinic data..." onkeydown="if(event.key==='Enter')searchQuery()">
+        <button class="send-btn" id="search-btn" onclick="searchQuery()">Search</button>
       </div>
     </div>
   </div>
@@ -259,6 +270,9 @@ async function init() {
     document.getElementById('status-badge').classList.add('off');
     document.getElementById('status-badge').innerHTML = '<span class="dot"></span> Server offline';
   }
+
+  // Init search panel (works without selecting a database)
+  initSearch();
 }
 
 // ============================================
@@ -294,7 +308,7 @@ function pickDb(id) {
   document.getElementById('finput').value='';
   document.getElementById('file-result').innerHTML='';
   document.getElementById('up-progress').classList.remove('vis');
-  renderSchema(); initChat(); switchMode(mode);
+  renderSchema(); initChat(); initSearch(); switchMode(mode);
 }
 
 function renderSchema() {
@@ -321,10 +335,13 @@ function renderSchema() {
 function switchMode(m) {
   mode=m;
   document.getElementById('tab-chat').classList.toggle('on',m==='chat');
+  document.getElementById('tab-search').classList.toggle('on',m==='search');
   document.getElementById('tab-upload').classList.toggle('on',m==='upload');
   document.getElementById('panel-chat').classList.toggle('vis',m==='chat');
+  document.getElementById('panel-search').classList.toggle('vis',m==='search');
   document.getElementById('panel-upload').classList.toggle('vis',m==='upload');
   if(m==='chat')document.getElementById('chat-in').focus();
+  if(m==='search')document.getElementById('search-in').focus();
 }
 
 // ============================================
@@ -373,6 +390,56 @@ async function sendMsg() {
   }
 
   busy=false; input.disabled=false; document.getElementById('send-btn').disabled=false; input.focus();
+}
+
+// ============================================
+// SEARCH MODE
+// ============================================
+let searchHistory = [];
+
+function initSearch() {
+  document.getElementById('search-msgs').innerHTML='';
+  addSearchChat('ai','Ask me anything about your clinic data — across <strong>all 12 databases</strong>.\n\nExamples:\n• "What bike parts do we have in stock?"\n• "Show me all meeting notes"\n• "What roles have we documented?"\n• "Any inventory items over $200?"');
+}
+
+function addSearchChat(type,html) {
+  const el=document.getElementById('search-msgs'), d=document.createElement('div');
+  d.className='cm '+type; d.innerHTML=html.replace(/\n/g,'<br>');
+  el.appendChild(d); el.scrollTop=el.scrollHeight; return d;
+}
+
+async function searchQuery() {
+  const input=document.getElementById('search-in'), text=input.value.trim();
+  if(!text||busy)return;
+  addSearchChat('user',esc(text)); input.value=''; busy=true;
+  input.disabled=true; document.getElementById('search-btn').disabled=true;
+  const thinking=addSearchChat('ai thinking','Searching databases...');
+
+  searchHistory.push({role:'user',content:text});
+
+  try {
+    const result = await serverCall('/query', {
+      message: text,
+      databases: DBS,
+      history: searchHistory.slice(-6)
+    });
+
+    thinking.remove();
+    if(result.text) {
+      addSearchChat('ai', formatMd(result.text));
+      searchHistory.push({role:'assistant',content:result.text});
+    }
+    if(result.results && result.results.length > 0) {
+      const totalEntries = result.results.reduce((s,r) => s + r.count, 0);
+      const dbNames = result.results.map(r => r.database).join(', ');
+      addSearchChat('sys',`📊 Found ${totalEntries} ${totalEntries===1?'result':'results'} across ${dbNames}`);
+    }
+  } catch(err) {
+    thinking.remove(); console.error(err);
+    addSearchChat('err','Search failed — check server connection. Error: '+err.message);
+  }
+
+  busy=false; input.disabled=false; document.getElementById('search-btn').disabled=false; input.focus();
 }
 
 // ============================================
