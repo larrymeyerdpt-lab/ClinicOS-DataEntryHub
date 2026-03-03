@@ -110,6 +110,20 @@ body::before{content:'';position:fixed;inset:0;background:radial-gradient(ellips
 .scan-result .barcode-val{color:var(--sel);font-family:'JetBrains Mono',monospace;font-weight:500}
 .img-thumb{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;background:rgba(80,144,232,0.15);border:1px solid rgba(80,144,232,0.25);border-radius:6px;font-size:11px;color:#5090e8;margin-bottom:6px}
 .img-thumb img{width:32px;height:32px;object-fit:cover;border-radius:4px}
+.drop-btn{width:42px;height:42px;display:flex;align-items:center;justify-content:center;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text-dim);font-size:18px;cursor:pointer;transition:all 0.15s;flex-shrink:0;position:relative}
+.drop-btn:hover{border-color:var(--sel);color:var(--sel);background:var(--sel-dim)}
+.drop-btn:disabled{opacity:0.3;cursor:not-allowed}
+.drop-btn input[type=file]{position:absolute;inset:0;opacity:0;cursor:pointer}
+.drop-btn:disabled input[type=file]{pointer-events:none}
+.chat-box.drag-over{outline:2px dashed var(--sel);outline-offset:-4px;background:var(--sel-dim)}
+.file-preview-strip{display:flex;align-items:center;gap:8px;padding:8px 12px;border-top:1px solid var(--border);background:var(--surface);font-size:12px;color:var(--text-dim)}
+.file-preview-strip .fp-icon{font-size:20px}
+.file-preview-strip .fp-info{flex:1;min-width:0}
+.file-preview-strip .fp-name{font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block}
+.file-preview-strip .fp-meta{font-size:11px;color:var(--text-muted)}
+.file-preview-strip .fp-thumb{width:40px;height:40px;object-fit:cover;border-radius:4px;border:1px solid var(--border)}
+.file-preview-strip .fp-remove{background:var(--surface-2);border:1px solid var(--border);border-radius:6px;color:var(--text-dim);padding:4px 10px;font-size:11px;cursor:pointer;white-space:nowrap}
+.file-preview-strip .fp-remove:hover{border-color:var(--red);color:var(--red)}
 .chat-in{flex:1;padding:11px 14px;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-family:'DM Sans',sans-serif;font-size:14px;outline:none;transition:border-color 0.15s}
 .chat-in:focus{border-color:var(--sel)}
 .chat-in::placeholder{color:var(--text-muted)}
@@ -205,8 +219,10 @@ body::before{content:'';position:fixed;inset:0;background:radial-gradient(ellips
     <div class="chat-box">
       <div class="chat-msgs" id="msgs"></div>
       <div class="counter" id="counter">No entries created yet</div>
+      <div class="file-preview-strip" id="fp-chat" style="display:none"></div>
       <div class="chat-input-row">
         <button class="scan-btn" id="scan-btn-chat" onclick="openScanner('chat')" disabled title="Scan receipt, product, or barcode">📷</button>
+        <button class="drop-btn" id="drop-btn-chat" disabled title="Attach file (image, PDF, spreadsheet)">📎<input type="file" id="file-pick-chat" accept="image/*,.pdf,.csv,.xlsx,.xls" onchange="handleFileDrop(this.files[0],'chat')"></button>
         <input class="chat-in" id="chat-in" placeholder="Select a database above to start adding entries..." disabled onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMsg()}">
         <button class="send-btn" id="send-btn" onclick="sendMsg()" disabled>Send</button>
       </div>
@@ -216,8 +232,10 @@ body::before{content:'';position:fixed;inset:0;background:radial-gradient(ellips
   <div class="panel" id="panel-search">
     <div class="chat-box">
       <div class="chat-msgs" id="search-msgs"></div>
+      <div class="file-preview-strip" id="fp-search" style="display:none"></div>
       <div class="chat-input-row">
         <button class="scan-btn" id="scan-btn-search" onclick="openScanner('search')" title="Scan and ask about an item">📷</button>
+        <button class="drop-btn" id="drop-btn-search" title="Attach file (image, PDF, spreadsheet)">📎<input type="file" id="file-pick-search" accept="image/*,.pdf,.csv,.xlsx,.xls" onchange="handleFileDrop(this.files[0],'search')"></button>
         <input class="chat-in" id="search-in" placeholder="Ask anything about your clinic data..." onkeydown="if(event.key==='Enter')searchQuery()">
         <button class="send-btn" id="search-btn" onclick="searchQuery()">Search</button>
       </div>
@@ -283,7 +301,7 @@ async function init() {
 async function serverCall(endpoint,body){const r=await fetch(CONFIG.serverUrl+endpoint,{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+CONFIG.authToken},body:JSON.stringify(body)});if(!r.ok){const err=await r.text();throw new Error(`Server error ${r.status}: ${err}`)}return await r.json()}
 
 function pickDb(id){
-  if(!id){db=null;document.getElementById('field-ref-chat').style.display='none';document.getElementById('chat-in').disabled=true;document.getElementById('chat-in').placeholder='Select a database above to start adding entries...';document.getElementById('send-btn').disabled=true;document.getElementById('scan-btn-chat').disabled=true;return}
+  if(!id){db=null;document.getElementById('field-ref-chat').style.display='none';document.getElementById('chat-in').disabled=true;document.getElementById('chat-in').placeholder='Select a database above to start adding entries...';document.getElementById('send-btn').disabled=true;document.getElementById('scan-btn-chat').disabled=true;document.getElementById('drop-btn-chat').disabled=true;return}
   db=DBS.find(d=>d.id===id);chatHistory=[];parsedRows=[];
   document.getElementById('chat-in').disabled=false;document.getElementById('chat-in').placeholder=`Describe items for ${db.name}...`;document.getElementById('send-btn').disabled=false;
   document.getElementById('finput').value='';document.getElementById('file-result').innerHTML='';document.getElementById('up-progress').classList.remove('vis');
@@ -554,6 +572,240 @@ async function searchQueryWithImage(imageBase64){
   }catch(err){thinking.remove();console.error(err);addSearchChat('err','Scan search failed — '+err.message)}
   busy=false;input.disabled=false;document.getElementById('search-btn').disabled=false;input.focus();
 }
+
+
+// ═══════════════════════════════════════
+// FILE DROP — Drag & drop + file picker for images, PDFs, spreadsheets
+// ═══════════════════════════════════════
+let pendingFile={chat:null, search:null};
+
+// Drag-and-drop on chat boxes
+function setupDragDrop(boxId, target){
+  const box=document.getElementById(boxId);
+  if(!box)return;
+  box.addEventListener('dragover',e=>{e.preventDefault();e.stopPropagation();box.classList.add('drag-over')});
+  box.addEventListener('dragleave',e=>{e.preventDefault();e.stopPropagation();box.classList.remove('drag-over')});
+  box.addEventListener('drop',e=>{
+    e.preventDefault();e.stopPropagation();box.classList.remove('drag-over');
+    const file=e.dataTransfer.files[0];
+    if(file)handleFileDrop(file,target);
+  });
+}
+
+function handleFileDrop(file,target){
+  if(!file)return;
+  const ext=file.name.split('.').pop().toLowerCase();
+  const isImage=['jpg','jpeg','png','gif','webp','heic'].includes(ext);
+  const isPdf=ext==='pdf';
+  const isSpreadsheet=['csv','xlsx','xls','tsv'].includes(ext);
+
+  if(!isImage&&!isPdf&&!isSpreadsheet){
+    toast('Unsupported file type. Use images, PDFs, or spreadsheets.');return;
+  }
+
+  // For spreadsheets in chat mode, redirect to the existing upload flow
+  if(isSpreadsheet&&target==='chat'){
+    if(!db){toast('Select a database first');return;}
+    // Switch to upload mode and process
+    if(!uploadOpen)toggleUpload();
+    if(ext==='csv'){
+      Papa.parse(file,{header:true,skipEmptyLines:true,complete:r=>showPreview(r.data,file.name)});
+    }else{
+      const reader=new FileReader();
+      reader.onload=e=>{const wb=XLSX.read(e.target.result,{type:'binary'});showPreview(XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]),file.name)};
+      reader.readAsBinaryString(file);
+    }
+    toast('📄 Spreadsheet loaded into Upload tab');
+    return;
+  }
+
+  // For spreadsheets in search mode — read and ask about the data
+  if(isSpreadsheet&&target==='search'){
+    const reader=new FileReader();
+    reader.onload=e=>{
+      let data;
+      if(ext==='csv'){
+        const parsed=Papa.parse(e.target.result,{header:true,skipEmptyLines:true});
+        data=parsed.data;
+      }else{
+        const wb=XLSX.read(e.target.result,{type:'binary'});
+        data=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
+      }
+      // Store as text summary for the search
+      const preview=JSON.stringify(data.slice(0,20),null,2);
+      pendingFile.search={type:'spreadsheet',name:file.name,size:file.size,text:preview,rows:data.length};
+      showFilePreview(target);
+    };
+    reader.readAsBinaryString(file);
+    return;
+  }
+
+  // For images — read as base64
+  if(isImage){
+    const reader=new FileReader();
+    reader.onload=e=>{
+      const dataUrl=e.target.result;
+      const base64=dataUrl.split(',')[1];
+      pendingFile[target]={type:'image',name:file.name,size:file.size,base64:base64,dataUrl:dataUrl};
+      showFilePreview(target);
+    };
+    reader.readAsDataURL(file);
+    return;
+  }
+
+  // For PDFs — read as base64 (Claude can read PDFs as images)
+  if(isPdf){
+    const reader=new FileReader();
+    reader.onload=e=>{
+      const dataUrl=e.target.result;
+      const base64=dataUrl.split(',')[1];
+      pendingFile[target]={type:'pdf',name:file.name,size:file.size,base64:base64};
+      showFilePreview(target);
+    };
+    reader.readAsDataURL(file);
+    return;
+  }
+}
+
+function showFilePreview(target){
+  const fp=document.getElementById('fp-'+target);
+  const f=pendingFile[target];
+  if(!f||!fp){return;}
+  const sizeStr=f.size<1024?(f.size+'B'):f.size<1048576?((f.size/1024).toFixed(1)+'KB'):((f.size/1048576).toFixed(1)+'MB');
+  const icon=f.type==='image'?'🖼️':f.type==='pdf'?'📄':f.type==='spreadsheet'?'📊':'📎';
+  const meta=f.type==='spreadsheet'?f.rows+' rows • '+sizeStr:sizeStr;
+  let thumbHtml='';
+  if(f.type==='image'&&f.dataUrl){thumbHtml='<img class="fp-thumb" src="'+f.dataUrl+'">';}
+
+  fp.innerHTML=thumbHtml+'<span class="fp-icon">'+icon+'</span><div class="fp-info"><span class="fp-name">'+esc(f.name)+'</span><span class="fp-meta">'+meta+'</span></div><button class="fp-remove" onclick="clearFileDrop(\''+target+'\')">✕ Remove</button>';
+  fp.style.display='flex';
+
+  // Update placeholder to hint about the attachment
+  const input=document.getElementById(target==='chat'?'chat-in':'search-in');
+  if(target==='chat'){
+    input.placeholder=f.type==='image'?'Describe what to do with this image (or just hit Send)...':f.type==='pdf'?'What should I extract from this PDF?':'Describe entries...';
+  }else{
+    input.placeholder=f.type==='spreadsheet'?'Ask a question about this spreadsheet data...':'Ask a question about this file...';
+  }
+  input.focus();
+}
+
+function clearFileDrop(target){
+  pendingFile[target]=null;
+  const fp=document.getElementById('fp-'+target);
+  if(fp){fp.style.display='none';fp.innerHTML='';}
+  // Reset placeholder
+  const input=document.getElementById(target==='chat'?'chat-in':'search-in');
+  if(target==='chat'){input.placeholder=db?'Describe items for '+db.name+'...':'Select a database above...';}
+  else{input.placeholder='Ask anything about your clinic data...';}
+  // Reset file input
+  const picker=document.getElementById('file-pick-'+target);
+  if(picker)picker.value='';
+}
+
+// ═══ Override sendMsg and searchQuery to check for pending files ═══
+const _origSendMsg=sendMsg;
+sendMsg=async function(){
+  const f=pendingFile.chat;
+  if(f){
+    const input=document.getElementById('chat-in');
+    // Default prompt if empty
+    if(!input.value.trim()){
+      if(f.type==='image')input.value='Read this image and extract all product/item details for the database.';
+      else if(f.type==='pdf')input.value='Read this document and extract all relevant entries for the database.';
+    }
+    if(f.type==='image'){
+      clearFileDrop('chat');
+      sendMsgWithImage(f.base64);
+    }else if(f.type==='pdf'){
+      clearFileDrop('chat');
+      sendMsgWithPdf(f.base64, f.name);
+    }
+    return;
+  }
+  _origSendMsg();
+};
+
+const _origSearchQuery=searchQuery;
+searchQuery=async function(){
+  const f=pendingFile.search;
+  if(f){
+    const input=document.getElementById('search-in');
+    if(!input.value.trim()){
+      if(f.type==='image')input.value='What can you tell me about the items in this image? Do we have any in our databases?';
+      else if(f.type==='pdf')input.value='Summarize this document and check if any items relate to our clinic data.';
+      else if(f.type==='spreadsheet')input.value='Analyze this data and tell me what you see. Any matches in our databases?';
+    }
+    if(f.type==='image'){
+      clearFileDrop('search');
+      searchQueryWithImage(f.base64);
+    }else if(f.type==='pdf'){
+      clearFileDrop('search');
+      searchQueryWithPdf(f.base64, f.name);
+    }else if(f.type==='spreadsheet'){
+      clearFileDrop('search');
+      searchQueryWithSpreadsheet(f.text, f.name);
+    }
+    return;
+  }
+  _origSearchQuery();
+};
+
+// ═══ PDF handlers — send as document to Claude ═══
+async function sendMsgWithPdf(pdfBase64, fileName){
+  const input=document.getElementById('chat-in'),text=input.value.trim();if(!text||!db||busy)return;
+  addChat('user','<div class="img-thumb">📄 '+esc(fileName)+'</div>'+esc(text));
+  input.value='';busy=true;input.disabled=true;document.getElementById('send-btn').disabled=true;
+  const thinking=addChat('ai thinking','Reading PDF and creating entries...');chatHistory.push({role:'user',content:text});
+  try{const result=await serverCall('/chat',{message:text,database:db,history:chatHistory,pdf:pdfBase64,pdfName:fileName});thinking.remove();
+    if(result.text){addChat('ai',formatMd(result.text));chatHistory.push({role:'assistant',content:result.text})}
+    if(result.createdCount>0){totalCreated+=result.createdCount;updateCounter();addChat('sys','✅ '+result.createdCount+' '+(result.createdCount===1?'entry':'entries')+' created from PDF!');toast('✅ '+result.createdCount+' added to '+db.icon+' '+db.name)}
+  }catch(err){thinking.remove();console.error(err);addChat('err','PDF processing failed — '+err.message)}
+  busy=false;input.disabled=false;document.getElementById('send-btn').disabled=false;input.focus();
+}
+
+async function searchQueryWithPdf(pdfBase64, fileName){
+  const input=document.getElementById('search-in'),text=input.value.trim();if(!text||busy)return;
+  addSearchChat('user','<div class="img-thumb">📄 '+esc(fileName)+'</div>'+esc(text));
+  input.value='';busy=true;input.disabled=true;document.getElementById('search-btn').disabled=true;
+  const thinking=addSearchChat('ai thinking','Reading PDF and searching...');searchHistory.push({role:'user',content:text});
+  try{const result=await serverCall('/query',{message:text,databases:DBS,history:searchHistory.slice(-6),pdf:pdfBase64,pdfName:fileName});thinking.remove();
+    if(result.text){addSearchChat('ai',formatMd(result.text));searchHistory.push({role:'assistant',content:result.text})}
+    if(result.results&&result.results.length>0){const t=result.results.reduce((s,r)=>s+r.count,0);const n=result.results.map(r=>r.database).join(', ');addSearchChat('sys','📊 Found '+t+' '+(t===1?'result':'results')+' across '+n)}
+  }catch(err){thinking.remove();console.error(err);addSearchChat('err','PDF search failed — '+err.message)}
+  busy=false;input.disabled=false;document.getElementById('search-btn').disabled=false;input.focus();
+}
+
+async function searchQueryWithSpreadsheet(textData, fileName){
+  const input=document.getElementById('search-in'),text=input.value.trim();if(!text||busy)return;
+  addSearchChat('user','<div class="img-thumb">📊 '+esc(fileName)+'</div>'+esc(text));
+  input.value='';busy=true;input.disabled=true;document.getElementById('search-btn').disabled=true;
+  const thinking=addSearchChat('ai thinking','Analyzing spreadsheet and searching...');searchHistory.push({role:'user',content:text+'\n\nSpreadsheet data:\n'+textData});
+  try{const result=await serverCall('/query',{message:text+'\n\nAttached spreadsheet data ('+fileName+'):\n'+textData,databases:DBS,history:searchHistory.slice(-6)});thinking.remove();
+    if(result.text){addSearchChat('ai',formatMd(result.text));searchHistory.push({role:'assistant',content:result.text})}
+    if(result.results&&result.results.length>0){const t=result.results.reduce((s,r)=>s+r.count,0);const n=result.results.map(r=>r.database).join(', ');addSearchChat('sys','📊 Found '+t+' '+(t===1?'result':'results')+' across '+n)}
+  }catch(err){thinking.remove();console.error(err);addSearchChat('err','Spreadsheet search failed — '+err.message)}
+  busy=false;input.disabled=false;document.getElementById('search-btn').disabled=false;input.focus();
+}
+
+// Init drag-drop on chat boxes
+document.addEventListener('DOMContentLoaded',()=>{
+  setTimeout(()=>{
+    // Find chat-box elements inside each panel
+    const chatPanel=document.querySelector('#panel-chat .chat-box');
+    const searchPanel=document.querySelector('#panel-search .chat-box');
+    if(chatPanel){
+      chatPanel.addEventListener('dragover',e=>{e.preventDefault();chatPanel.classList.add('drag-over')});
+      chatPanel.addEventListener('dragleave',e=>{e.preventDefault();chatPanel.classList.remove('drag-over')});
+      chatPanel.addEventListener('drop',e=>{e.preventDefault();chatPanel.classList.remove('drag-over');if(e.dataTransfer.files[0])handleFileDrop(e.dataTransfer.files[0],'chat')});
+    }
+    if(searchPanel){
+      searchPanel.addEventListener('dragover',e=>{e.preventDefault();searchPanel.classList.add('drag-over')});
+      searchPanel.addEventListener('dragleave',e=>{e.preventDefault();searchPanel.classList.remove('drag-over')});
+      searchPanel.addEventListener('drop',e=>{e.preventDefault();searchPanel.classList.remove('drag-over');if(e.dataTransfer.files[0])handleFileDrop(e.dataTransfer.files[0],'search')});
+    }
+  },100);
+});
 
 init();
 </script>
