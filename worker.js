@@ -26,9 +26,18 @@ export default {
 // CHAT MODE — Natural language → Create entries
 // ═══════════════════════════════════════
 async function handleChat(request, env, cors) {
-  const { message, database, history = [] } = await request.json();
+  const { message, database, history = [], image } = await request.json();
   if (!message || !database) return jr({ error: 'Missing message or database' }, 400, cors);
-  const msgs = [...history.map(h => ({ role: h.role, content: h.content })), { role: 'user', content: message }];
+  const msgs = [...history.map(h => ({ role: h.role, content: h.content }))];
+  if (image) {
+    const mt = image.startsWith('/9j/') ? 'image/jpeg' : 'image/png';
+    msgs.push({ role: 'user', content: [
+      { type: 'image', source: { type: 'base64', media_type: mt, data: image } },
+      { type: 'text', text: message }
+    ]});
+  } else {
+    msgs.push({ role: 'user', content: message });
+  }
   const sys = buildPrompt(database);
   const resp = await callClaude(env.ANTHROPIC_API_KEY, sys, msgs);
   let text = resp.content?.map(b => b.type === 'text' ? b.text : '').join('') || '';
@@ -65,14 +74,24 @@ async function handleCreate(request, env, cors) {
 
 // ═══════════════════════════════════════
 // QUERY MODE — Search across databases, AI summarizes
+// Now with deep page content reading!
 // ═══════════════════════════════════════
 async function handleQuery(request, env, cors) {
-  const { message, databases, history = [] } = await request.json();
+  const { message, databases, history = [], image } = await request.json();
   if (!message || !databases) return jr({ error: 'Missing message or databases' }, 400, cors);
 
   // Step 1: Ask Claude which databases to search and what filters to use
   const routingSys = buildRoutingPrompt(databases);
-  const routingMsgs = [...history.map(h => ({ role: h.role, content: h.content })), { role: 'user', content: message }];
+  const routingMsgs = [...history.map(h => ({ role: h.role, content: h.content }))];
+  if (image) {
+    const mt = image.startsWith('/9j/') ? 'image/jpeg' : 'image/png';
+    routingMsgs.push({ role: 'user', content: [
+      { type: 'image', source: { type: 'base64', media_type: mt, data: image } },
+      { type: 'text', text: message }
+    ]});
+  } else {
+    routingMsgs.push({ role: 'user', content: message });
+  }
   const routingResp = await callClaude(env.ANTHROPIC_API_KEY, routingSys, routingMsgs);
   const routingText = routingResp.content?.map(b => b.type === 'text' ? b.text : '').join('') || '';
 
@@ -94,16 +113,34 @@ async function handleQuery(request, env, cors) {
     if (!db) continue;
     const pages = await queryNotionDatabase(env.NOTION_TOKEN, search.database_id, search.filter || undefined, search.sorts || undefined);
     if (pages.length > 0) {
+      const entries = [];
+      for (const p of pages) {
+        const props = extractPageProperties(p, db);
+
+        // Deep read: fetch page body content for richer results
+        // Only when deep_read is not explicitly false, and limit to 10 pages max
+        if (search.deep_read !== false && pages.length <= 10) {
+          const bodyContent = await getPageContent(env.NOTION_TOKEN, p.id);
+          if (bodyContent) {
+            props['_page_content'] = bodyContent;
+          }
+        }
+
+        entries.push(props);
+      }
       allResults.push({
         database: db.name,
         count: pages.length,
-        entries: pages.map(p => extractPageProperties(p, db))
+        entries: entries
       });
     }
   }
 
   // Step 4: Send results to Claude for a conversational summary
-  const summarySys = `You are a helpful clinic assistant. The user asked a question and we queried the clinic's Notion databases. Summarize the results conversationally. Be specific with names, numbers, and details. If no results were found, say so helpfully. Keep it concise but complete.`;
+  const summarySys = `You are a helpful clinic assistant. The user asked a question and we queried the clinic's Notion databases. Summarize the results conversationally. Be specific with names, numbers, and details. If no results were found, say so helpfully. Keep it concise but complete.
+
+IMPORTANT: Results may include a "_page_content" field which contains the full body text of the Notion page. This often has the richest information — meeting transcripts, summaries, detailed notes, procedures, and context that go far beyond the structured property fields. Always check _page_content for relevant information and include key details in your summary when answering the user's question.`;
+
   const summaryMsgs = [
     { role: 'user', content: `Original question: "${message}"\n\nDatabase results:\n${JSON.stringify(allResults, null, 2)}\n\nPlease summarize these results for the user in a helpful, conversational way.` }
   ];
@@ -179,6 +216,100 @@ async function queryNotionDatabase(token, databaseId, filter, sorts) {
     const data = await r.json();
     return data.results || [];
   } catch (err) { console.error('Notion query fetch error:', err); return []; }
+}
+
+// ═══════════════════════════════════════
+// PAGE CONTENT READER
+// Fetches the body blocks from a Notion page —
+// the actual content (paragraphs, headings, lists, etc.)
+// not just the property fields at the top
+// ═══════════════════════════════════════
+async function getPageContent(token, pageId) {
+  try {
+    const blocks = [];
+    let cursor;
+    let iterations = 0;
+
+    // Paginate through blocks (Notion returns 100 at a time)
+    // Cap at 3 iterations (300 blocks) to avoid timeouts
+    do {
+      const url = `https://api.notion.com/v1/blocks/${pageId}/children?page_size=100${cursor ? '&start_cursor=' + cursor : ''}`;
+      const r = await fetch(url, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Notion-Version': '2022-06-28'
+        }
+      });
+      if (!r.ok) {
+        console.error('Notion blocks error:', await r.text());
+        return null;
+      }
+      const data = await r.json();
+      blocks.push(...(data.results || []));
+      cursor = data.has_more ? data.next_cursor : null;
+      iterations++;
+    } while (cursor && iterations < 3);
+
+    // Extract text content from blocks
+    const textParts = [];
+    for (const block of blocks) {
+      const text = extractBlockText(block);
+      if (text) textParts.push(text);
+    }
+
+    const fullText = textParts.join('\n');
+    // Cap at ~4000 chars to keep token usage reasonable
+    if (fullText.length > 4000) {
+      return fullText.substring(0, 4000) + '\n[... content truncated]';
+    }
+    return fullText || null;
+  } catch (err) {
+    console.error('Page content fetch error:', err);
+    return null;
+  }
+}
+
+function extractBlockText(block) {
+  const type = block.type;
+  if (!type) return null;
+
+  const richTextTypes = [
+    'paragraph', 'heading_1', 'heading_2', 'heading_3',
+    'bulleted_list_item', 'numbered_list_item', 'quote', 'callout', 'toggle'
+  ];
+
+  if (richTextTypes.includes(type)) {
+    const richText = block[type]?.rich_text;
+    if (!richText || richText.length === 0) return null;
+    const text = richText.map(t => t.plain_text).join('');
+    if (type === 'heading_1') return `# ${text}`;
+    if (type === 'heading_2') return `## ${text}`;
+    if (type === 'heading_3') return `### ${text}`;
+    if (type === 'bulleted_list_item') return `• ${text}`;
+    if (type === 'numbered_list_item') return `- ${text}`;
+    if (type === 'quote') return `> ${text}`;
+    return text;
+  }
+
+  if (type === 'to_do') {
+    const checked = block.to_do?.checked ? '☑' : '☐';
+    const text = block.to_do?.rich_text?.map(t => t.plain_text).join('') || '';
+    return `${checked} ${text}`;
+  }
+
+  if (type === 'code') {
+    const text = block.code?.rich_text?.map(t => t.plain_text).join('') || '';
+    return `[code] ${text}`;
+  }
+
+  if (type === 'divider') return '---';
+
+  if (type === 'table_row') {
+    const cells = block.table_row?.cells || [];
+    return cells.map(cell => cell.map(t => t.plain_text).join('')).join(' | ');
+  }
+
+  return null;
 }
 
 function extractPageProperties(page, db) {
@@ -289,6 +420,7 @@ INSTRUCTIONS:
    - "database_id": the database ID to query
    - "filter": optional Notion filter object (use Notion API filter syntax)
    - "sorts": optional Notion sorts array
+   - "deep_read": boolean (default true). Set to false ONLY for large inventory queries where you expect 20+ results and only need property-level data. For meetings, SOPs, decisions, policies, role blueprints — always keep true so we can read the full page content.
 3. For broad questions ("show me everything", "what do we have"), query without filters
 4. For specific questions ("bike parts over $150"), add appropriate filters
 5. You can search multiple databases if the question spans them
@@ -302,7 +434,7 @@ NOTION FILTER SYNTAX EXAMPLES:
 Return ONLY the JSON object, no other text.
 
 Example response:
-{"searches":[{"database_id":"abc123","filter":{"property":"Cost","number":{"greater_than":150}}}]}`;
+{"searches":[{"database_id":"abc123","filter":{"property":"Cost","number":{"greater_than":150}},"deep_read":false}]}`;
 }
 
 function jr(data, status, cors) {
