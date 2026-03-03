@@ -565,8 +565,9 @@ async function searchQueryWithImage(imageBase64){
   const input=document.getElementById('search-in'),text=input.value.trim();if(!text||busy)return;
   addSearchChat('user','<div class="img-thumb"><img src="data:image/jpeg;base64,'+imageBase64.substring(0,100)+'..." alt="scan">📷 Scanned image</div>'+esc(text));
   input.value='';busy=true;input.disabled=true;document.getElementById('search-btn').disabled=true;
-  const thinking=addSearchChat('ai thinking','Analyzing image and searching...');searchHistory.push({role:'user',content:text});
-  try{const result=await serverCall('/query',{message:text,databases:DBS,history:searchHistory.slice(-6),image:imageBase64});thinking.remove();
+  const thinking=addSearchChat('ai thinking','Analyzing image and searching...');
+  searchHistory.push({role:'user',content:'[User attached an image and said]: '+text});
+  try{const result=await serverCall('/query',{message:text,databases:DBS,history:searchHistory.slice(0,-1),image:imageBase64});thinking.remove();
     if(result.text){addSearchChat('ai',formatMd(result.text));searchHistory.push({role:'assistant',content:result.text})}
     if(result.results&&result.results.length>0){const t=result.results.reduce((s,r)=>s+r.count,0);const n=result.results.map(r=>r.database).join(', ');addSearchChat('sys','📊 Found '+t+' '+(t===1?'result':'results')+' across '+n)}
   }catch(err){thinking.remove();console.error(err);addSearchChat('err','Scan search failed — '+err.message)}
@@ -706,10 +707,10 @@ function clearFileDrop(target){
 // ═══ Override sendMsg and searchQuery to check for pending files ═══
 const _origSendMsg=sendMsg;
 sendMsg=async function(){
+  // Check for pending file drop first
   const f=pendingFile.chat;
   if(f){
     const input=document.getElementById('chat-in');
-    // Default prompt if empty
     if(!input.value.trim()){
       if(f.type==='image')input.value='Read this image and extract all product/item details for the database.';
       else if(f.type==='pdf')input.value='Read this document and extract all relevant entries for the database.';
@@ -722,6 +723,17 @@ sendMsg=async function(){
       sendMsgWithPdf(f.base64, f.name);
     }
     return;
+  }
+  // If there's a recent image from a scan and user is following up (e.g. "yes"), re-attach it
+  if(window._lastImageBase64){
+    const input=document.getElementById('chat-in');
+    const text=input.value.trim();
+    if(text){
+      const imgCopy=window._lastImageBase64;
+      window._lastImageBase64=null;
+      sendMsgWithImage(imgCopy);
+      return;
+    }
   }
   _origSendMsg();
 };
