@@ -82,7 +82,34 @@ body::before{content:'';position:fixed;inset:0;background:radial-gradient(ellips
 .cm.sys{background:var(--green-dim);border:1px solid rgba(80,200,120,0.2);align-self:center;text-align:center;font-size:12.5px;color:var(--green);max-width:95%}
 .cm.err{background:var(--red-dim);border:1px solid rgba(232,80,80,0.2);align-self:center;text-align:center;font-size:12.5px;color:var(--red);max-width:95%}
 .cm.thinking{color:var(--text-muted);font-style:italic}
-.chat-input-row{padding:12px;border-top:1px solid var(--border);display:flex;gap:8px}
+.chat-input-row{padding:12px;border-top:1px solid var(--border);display:flex;gap:8px;align-items:center}
+.scan-btn{width:42px;height:42px;display:flex;align-items:center;justify-content:center;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text-dim);font-size:18px;cursor:pointer;transition:all 0.15s;flex-shrink:0}
+.scan-btn:hover{border-color:var(--sel);color:var(--sel);background:var(--sel-dim)}
+.scan-btn:disabled{opacity:0.3;cursor:not-allowed}
+.scan-modal{position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:1000;display:none;flex-direction:column;align-items:center;justify-content:center;padding:20px}
+.scan-modal.open{display:flex}
+.scan-modal-hdr{position:absolute;top:0;left:0;right:0;display:flex;align-items:center;justify-content:space-between;padding:16px 20px;z-index:2}
+.scan-modal-title{color:#e8e9ed;font-size:15px;font-weight:600}
+.scan-modal-close{background:#1a1b24;border:1px solid #2a2b38;border-radius:8px;color:#e8e9ed;padding:8px 16px;font-size:13px;font-weight:600;cursor:pointer}
+.scan-modal-close:hover{border-color:var(--red);color:var(--red)}
+.scan-video-wrap{position:relative;width:100%;max-width:480px;border-radius:var(--radius);overflow:hidden;border:2px solid var(--sel-border)}
+.scan-video-wrap video{width:100%;display:block;background:#000}
+.scan-overlay{position:absolute;inset:0;pointer-events:none}
+.scan-line{position:absolute;left:10%;right:10%;top:50%;height:2px;background:var(--sel);box-shadow:0 0 12px var(--sel);animation:scanMove 2s ease-in-out infinite}
+@keyframes scanMove{0%,100%{top:30%}50%{top:70%}}
+.scan-actions{display:flex;gap:12px;margin-top:20px;flex-wrap:wrap;justify-content:center}
+.scan-action-btn{padding:12px 28px;border-radius:var(--radius-sm);font-family:'DM Sans',sans-serif;font-size:14px;font-weight:600;cursor:pointer;border:none;transition:all 0.15s}
+.scan-capture-btn{background:var(--sel);color:var(--bg)}
+.scan-capture-btn:hover{filter:brightness(1.1)}
+.scan-mode-btn{background:#1a1b24;color:#e8e9ed;border:1px solid #2a2b38}
+.scan-mode-btn:hover{border-color:var(--sel);color:var(--sel)}
+.scan-mode-btn.active{background:var(--sel-dim);color:var(--sel);border-color:var(--sel-border)}
+.scan-preview{max-width:480px;width:100%;border-radius:var(--radius);overflow:hidden;border:2px solid var(--sel-border)}
+.scan-preview img{width:100%;display:block}
+.scan-result{margin-top:12px;padding:12px 16px;background:#1a1b24;border:1px solid #2a2b38;border-radius:var(--radius-sm);font-size:13px;color:#e8e9ed;max-width:480px;width:100%}
+.scan-result .barcode-val{color:var(--sel);font-family:'JetBrains Mono',monospace;font-weight:500}
+.img-thumb{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;background:rgba(80,144,232,0.15);border:1px solid rgba(80,144,232,0.25);border-radius:6px;font-size:11px;color:#5090e8;margin-bottom:6px}
+.img-thumb img{width:32px;height:32px;object-fit:cover;border-radius:4px}
 .chat-in{flex:1;padding:11px 14px;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-family:'DM Sans',sans-serif;font-size:14px;outline:none;transition:border-color 0.15s}
 .chat-in:focus{border-color:var(--sel)}
 .chat-in::placeholder{color:var(--text-muted)}
@@ -179,6 +206,7 @@ body::before{content:'';position:fixed;inset:0;background:radial-gradient(ellips
       <div class="chat-msgs" id="msgs"></div>
       <div class="counter" id="counter">No entries created yet</div>
       <div class="chat-input-row">
+        <button class="scan-btn" id="scan-btn-chat" onclick="openScanner('chat')" disabled title="Scan receipt, product, or barcode">📷</button>
         <input class="chat-in" id="chat-in" placeholder="Select a database above to start adding entries..." disabled onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMsg()}">
         <button class="send-btn" id="send-btn" onclick="sendMsg()" disabled>Send</button>
       </div>
@@ -189,6 +217,7 @@ body::before{content:'';position:fixed;inset:0;background:radial-gradient(ellips
     <div class="chat-box">
       <div class="chat-msgs" id="search-msgs"></div>
       <div class="chat-input-row">
+        <button class="scan-btn" id="scan-btn-search" onclick="openScanner('search')" title="Scan and ask about an item">📷</button>
         <input class="chat-in" id="search-in" placeholder="Ask anything about your clinic data..." onkeydown="if(event.key==='Enter')searchQuery()">
         <button class="send-btn" id="search-btn" onclick="searchQuery()">Search</button>
       </div>
@@ -254,7 +283,7 @@ async function init() {
 async function serverCall(endpoint,body){const r=await fetch(CONFIG.serverUrl+endpoint,{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+CONFIG.authToken},body:JSON.stringify(body)});if(!r.ok){const err=await r.text();throw new Error(`Server error ${r.status}: ${err}`)}return await r.json()}
 
 function pickDb(id){
-  if(!id){db=null;document.getElementById('field-ref-chat').style.display='none';document.getElementById('chat-in').disabled=true;document.getElementById('chat-in').placeholder='Select a database above to start adding entries...';document.getElementById('send-btn').disabled=true;return}
+  if(!id){db=null;document.getElementById('field-ref-chat').style.display='none';document.getElementById('chat-in').disabled=true;document.getElementById('chat-in').placeholder='Select a database above to start adding entries...';document.getElementById('send-btn').disabled=true;document.getElementById('scan-btn-chat').disabled=true;return}
   db=DBS.find(d=>d.id===id);chatHistory=[];parsedRows=[];
   document.getElementById('chat-in').disabled=false;document.getElementById('chat-in').placeholder=`Describe items for ${db.name}...`;document.getElementById('send-btn').disabled=false;
   document.getElementById('finput').value='';document.getElementById('file-result').innerHTML='';document.getElementById('up-progress').classList.remove('vis');
@@ -371,7 +400,187 @@ uz.addEventListener('dragover',e=>{e.preventDefault();uz.classList.add('over')})
 uz.addEventListener('dragleave',()=>uz.classList.remove('over'));
 uz.addEventListener('drop',e=>{e.preventDefault();uz.classList.remove('over');if(e.dataTransfer.files[0]){document.getElementById('finput').files=e.dataTransfer.files;handleFile({target:{files:[e.dataTransfer.files[0]]}})}});
 
+
+// ═══════════════════════════════════════
+// SCANNER — Camera capture + Barcode detection
+// ═══════════════════════════════════════
+let scanStream=null, scanMode='photo', scanTarget='chat', pendingImage=null, barcodeDetector=null;
+
+// Check for native BarcodeDetector API
+if('BarcodeDetector' in window){barcodeDetector=new BarcodeDetector({formats:['ean_13','ean_8','upc_a','upc_e','code_128','code_39','qr_code','data_matrix']})}
+
+function openScanner(target){
+  scanTarget=target;
+  pendingImage=null;
+  document.getElementById('scan-modal').classList.add('open');
+  document.getElementById('scan-video-wrap').style.display='block';
+  document.getElementById('scan-preview').style.display='none';
+  document.getElementById('scan-result').style.display='none';
+  document.getElementById('scan-capture').style.display='';
+  document.getElementById('scan-use').style.display='none';
+  document.getElementById('scan-retake').style.display='none';
+  document.getElementById('scan-modal-title').textContent=target==='chat'?'📷 Scan Receipt or Product':'📷 Scan & Search';
+  startCamera();
+}
+
+async function startCamera(){
+  try{
+    scanStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment',width:{ideal:1280},height:{ideal:720}}});
+    document.getElementById('scan-video').srcObject=scanStream;
+    if(scanMode==='barcode'&&barcodeDetector)startBarcodeDetection();
+  }catch(err){
+    console.error('Camera error:',err);
+    document.getElementById('scan-result').style.display='block';
+    document.getElementById('scan-result').innerHTML='<span style="color:var(--red)">Camera access denied. Check browser permissions.</span>';
+  }
+}
+
+function stopCamera(){
+  if(scanStream){scanStream.getTracks().forEach(t=>t.stop());scanStream=null}
+  document.getElementById('scan-video').srcObject=null;
+}
+
+function closeScanner(){
+  stopCamera();
+  document.getElementById('scan-modal').classList.remove('open');
+  pendingImage=null;
+}
+
+function setScanMode(m){
+  scanMode=m;
+  document.getElementById('scan-mode-photo').classList.toggle('active',m==='photo');
+  document.getElementById('scan-mode-barcode').classList.toggle('active',m==='barcode');
+  if(m==='barcode'&&barcodeDetector&&scanStream)startBarcodeDetection();
+}
+
+let barcodeInterval=null;
+function startBarcodeDetection(){
+  if(barcodeInterval)clearInterval(barcodeInterval);
+  const video=document.getElementById('scan-video');
+  barcodeInterval=setInterval(async()=>{
+    if(!scanStream||!barcodeDetector||scanMode!=='barcode')return clearInterval(barcodeInterval);
+    try{
+      const barcodes=await barcodeDetector.detect(video);
+      if(barcodes.length>0){
+        clearInterval(barcodeInterval);
+        const code=barcodes[0];
+        capturePhoto();
+        setTimeout(()=>{
+          document.getElementById('scan-result').style.display='block';
+          document.getElementById('scan-result').innerHTML='Barcode detected: <span class="barcode-val">'+esc(code.rawValue)+'</span> ('+code.format+')';
+        },100);
+      }
+    }catch(e){}
+  },500);
+}
+
+function capturePhoto(){
+  const video=document.getElementById('scan-video');
+  const canvas=document.getElementById('scan-canvas');
+  canvas.width=video.videoWidth;canvas.height=video.videoHeight;
+  const ctx=canvas.getContext('2d');
+  ctx.drawImage(video,0,0);
+  const dataUrl=canvas.toDataURL('image/jpeg',0.85);
+  pendingImage=dataUrl.split(',')[1]; // base64 without prefix
+  
+  // Show preview
+  stopCamera();
+  document.getElementById('scan-video-wrap').style.display='none';
+  document.getElementById('scan-preview').style.display='block';
+  document.getElementById('scan-preview-img').src=dataUrl;
+  document.getElementById('scan-capture').style.display='none';
+  document.getElementById('scan-use').style.display='';
+  document.getElementById('scan-retake').style.display='';
+}
+
+function retakeScan(){
+  pendingImage=null;
+  document.getElementById('scan-video-wrap').style.display='block';
+  document.getElementById('scan-preview').style.display='none';
+  document.getElementById('scan-result').style.display='none';
+  document.getElementById('scan-capture').style.display='';
+  document.getElementById('scan-use').style.display='none';
+  document.getElementById('scan-retake').style.display='none';
+  startCamera();
+}
+
+function useScan(){
+  if(!pendingImage)return;
+  closeScanner();
+  
+  if(scanTarget==='chat'){
+    // Set a default prompt and auto-send
+    const input=document.getElementById('chat-in');
+    const barcodeResult=document.getElementById('scan-result').querySelector('.barcode-val');
+    if(barcodeResult){
+      input.value='Scanned barcode: '+barcodeResult.textContent+'. Look up this product and add it to inventory.';
+    } else {
+      input.value='Read this image and extract all product/item details for the database. Include names, prices, quantities, and any other relevant information you can see.';
+    }
+    sendMsgWithImage(pendingImage);
+  } else {
+    const input=document.getElementById('search-in');
+    const barcodeResult=document.getElementById('scan-result').querySelector('.barcode-val');
+    if(barcodeResult){
+      input.value='Do we have this product in our inventory? Barcode: '+barcodeResult.textContent;
+    } else {
+      input.value='What can you tell me about the items shown in this image? Do we have any of these in our databases?';
+    }
+    searchQueryWithImage(pendingImage);
+  }
+  pendingImage=null;
+}
+
+async function sendMsgWithImage(imageBase64){
+  const input=document.getElementById('chat-in'),text=input.value.trim();if(!text||!db||busy)return;
+  addChat('user','<div class="img-thumb"><img src="data:image/jpeg;base64,'+imageBase64.substring(0,100)+'..." alt="scan">📷 Scanned image</div>'+esc(text));
+  input.value='';busy=true;input.disabled=true;document.getElementById('send-btn').disabled=true;
+  const thinking=addChat('ai thinking','Analyzing image and creating entries...');chatHistory.push({role:'user',content:text});
+  try{const result=await serverCall('/chat',{message:text,database:db,history:chatHistory,image:imageBase64});thinking.remove();
+    if(result.text){addChat('ai',formatMd(result.text));chatHistory.push({role:'assistant',content:result.text})}
+    if(result.createdCount>0){totalCreated+=result.createdCount;updateCounter();addChat('sys','✅ '+result.createdCount+' '+(result.createdCount===1?'entry':'entries')+' created from scan!');toast('✅ '+result.createdCount+' added to '+db.icon+' '+db.name)}
+  }catch(err){thinking.remove();console.error(err);addChat('err','Scan processing failed — '+err.message)}
+  busy=false;input.disabled=false;document.getElementById('send-btn').disabled=false;input.focus();
+}
+
+async function searchQueryWithImage(imageBase64){
+  const input=document.getElementById('search-in'),text=input.value.trim();if(!text||busy)return;
+  addSearchChat('user','<div class="img-thumb"><img src="data:image/jpeg;base64,'+imageBase64.substring(0,100)+'..." alt="scan">📷 Scanned image</div>'+esc(text));
+  input.value='';busy=true;input.disabled=true;document.getElementById('search-btn').disabled=true;
+  const thinking=addSearchChat('ai thinking','Analyzing image and searching...');searchHistory.push({role:'user',content:text});
+  try{const result=await serverCall('/query',{message:text,databases:DBS,history:searchHistory.slice(-6),image:imageBase64});thinking.remove();
+    if(result.text){addSearchChat('ai',formatMd(result.text));searchHistory.push({role:'assistant',content:result.text})}
+    if(result.results&&result.results.length>0){const t=result.results.reduce((s,r)=>s+r.count,0);const n=result.results.map(r=>r.database).join(', ');addSearchChat('sys','📊 Found '+t+' '+(t===1?'result':'results')+' across '+n)}
+  }catch(err){thinking.remove();console.error(err);addSearchChat('err','Scan search failed — '+err.message)}
+  busy=false;input.disabled=false;document.getElementById('search-btn').disabled=false;input.focus();
+}
+
 init();
 </script>
+
+<!-- Scan Modal -->
+<div class="scan-modal" id="scan-modal">
+  <div class="scan-modal-hdr">
+    <span class="scan-modal-title" id="scan-modal-title">📷 Scan Receipt or Product</span>
+    <button class="scan-modal-close" onclick="closeScanner()">✕ Close</button>
+  </div>
+  <div class="scan-video-wrap" id="scan-video-wrap">
+    <video id="scan-video" autoplay playsinline></video>
+    <div class="scan-overlay"><div class="scan-line"></div></div>
+  </div>
+  <div class="scan-preview" id="scan-preview" style="display:none">
+    <img id="scan-preview-img" src="">
+  </div>
+  <div class="scan-result" id="scan-result" style="display:none"></div>
+  <div class="scan-actions">
+    <button class="scan-action-btn scan-mode-btn active" id="scan-mode-photo" onclick="setScanMode('photo')">📄 Photo</button>
+    <button class="scan-action-btn scan-mode-btn" id="scan-mode-barcode" onclick="setScanMode('barcode')">⊟ Barcode</button>
+    <button class="scan-action-btn scan-capture-btn" id="scan-capture" onclick="capturePhoto()">📸 Capture</button>
+    <button class="scan-action-btn scan-capture-btn" id="scan-use" style="display:none" onclick="useScan()">✓ Use This</button>
+    <button class="scan-action-btn scan-mode-btn" id="scan-retake" style="display:none" onclick="retakeScan()">↺ Retake</button>
+  </div>
+</div>
+<canvas id="scan-canvas" style="display:none"></canvas>
+
 </body>
 </html>
